@@ -18,6 +18,7 @@ sitebin=$(perl -MConfig -e 'print $Config{installsitebin}')
 sitelib=$(perl -MConfig -e 'print $Config{installsitelib}')
 sitearch=$(perl -MConfig -e 'print $Config{installsitearch}')
 archlib=$(perl -MConfig -e 'print $Config{archlib}')
+privlib=$(perl -MConfig -e 'print $Config{installprivlib}')
 
 # The packed main script must not be called "biber": on a case-insensitive
 # filesystem this collides with the sibling Biber/ lib directory pp bundles
@@ -32,10 +33,19 @@ trap 'rm -f "${work_script}"' EXIT
 # expects at runtime. Found by inspecting the actually-installed module
 # layout rather than a hardcoded MacPorts path, so this works regardless of
 # which Perl toolchain provided them.
-ucollate_dir=$(perl -MUnicode::Collate -e '($p = $INC{"Unicode/Collate.pm"}) =~ s/\.pm$//; print $p')
+#
+# Unicode::Collate is dual-life: modern Perl core ships it under privlib
+# (Config{installprivlib}), not sitelib/archlib, and $INC{"Unicode/Collate.pm"}
+# can resolve to an archlib stub with no Locale/CJK/allkeys.txt/keys.txt
+# alongside it. Find allkeys.txt itself and use its directory, rather than
+# trusting %INC's own directory, so this keeps working across whichever tree
+# actually holds the per-locale collation data.
+ucollate_allkeys=$(find "${privlib}" "${sitelib}" "${sitearch}" "${archlib}" -name allkeys.txt -print -quit)
+ucollate_dir=""
+[ -n "${ucollate_allkeys}" ] && ucollate_dir=$(dirname "${ucollate_allkeys}")
 mozilla_ca=$(perl -MMozilla::CA -e 'print Mozilla::CA::SSL_ca_file()')
-isbn_rangemsg=$(find "${sitelib}" "${sitearch}" -name RangeMessage.xml -print -quit)
-linebreak_bundle=$(find "${sitearch}" "${archlib}" \( -name 'LineBreak.bundle' -o -name 'LineBreak.so' \) -print -quit)
+isbn_rangemsg=$(find "${sitelib}" "${sitearch}" "${privlib}" -name RangeMessage.xml -print -quit)
+linebreak_bundle=$(find "${sitearch}" "${archlib}" "${privlib}" \( -name 'LineBreak.bundle' -o -name 'LineBreak.so' \) -print -quit)
 
 [ -n "${ucollate_dir}" ] || { echo "pack.sh: Unicode::Collate install dir not found" >&2; exit 1; }
 [ -n "${mozilla_ca}" ] || { echo "pack.sh: Mozilla::CA cacert.pem not found" >&2; exit 1; }
