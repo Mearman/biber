@@ -76,10 +76,11 @@ jobs:
       - name: Pack biber with pp
         run: dist/darwin_common/pack.sh "${{ matrix.output }}"
 
+      # Hardened runtime (--options runtime) imposes stricter Mach-O structural checks that a PAR::Packer executable fails ("main executable failed strict validation"), because pp appends the zipped PAR archive after the compiled Perl interpreter rather than producing a plain Mach-O. Hardened runtime is a notarization precondition we are not pursuing here (the binary is ad-hoc signed, not notarized), so a plain ad-hoc signature is both sufficient and the only option pp's own binary layout actually permits.
       - name: Ad-hoc codesign
         run: |
           chmod +x "${{ matrix.output }}"
-          codesign -s - --force --timestamp --options runtime "${{ matrix.output }}"
+          codesign -s - --force "${{ matrix.output }}"
           codesign -v "${{ matrix.output }}"
 
       - name: Smoke test
@@ -117,7 +118,7 @@ jobs:
       # Packing already invalidated each thin binary's signature by appending the PAR archive, and lipo -create invalidates it again for the joined binary, so the universal binary needs its own fresh signature here.
       - name: Re-sign after lipo
         run: |
-          codesign -s - --force --timestamp --options runtime biber-darwin_universal
+          codesign -s - --force biber-darwin_universal
           codesign -v biber-darwin_universal
 
       - name: Smoke test (native slice)
