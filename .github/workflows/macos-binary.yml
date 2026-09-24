@@ -1,0 +1,162 @@
+name: macOS universal binary
+
+# Builds a biber 2.17 macOS universal (arm64 + x86_64) PAR::Packer binary using a PAR::Packer commit that fixes the macOS 27 "lipo -extract_family" removal (see dist/darwin_common/pack.sh for the packing details and https://github.com/rschupp/PAR-Packer/commit/97977cb0c08ea977af9c7c7016ba5128c4cbfa0e for the upstream fix this pins).
+
+on:
+  push:
+    branches: [ci/macos-universal-binary]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Attach the built binaries to a release on this repository"
+        type: boolean
+        default: false
+
+env:
+  PAR_PACKER_REF: 97977cb0c08ea977af9c7c7016ba5128c4cbfa0e
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            os: macos-15
+            output: biber-darwin_arm64
+          - arch: x86_64
+            os: macos-15-intel
+            output: biber-darwin_x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify runner architecture
+        run: |
+          actual=$(uname -m)
+          if [ "${actual}" != "${{ matrix.arch }}" ]; then
+            echo "expected ${{ matrix.arch }}, got ${actual}" >&2
+            exit 1
+          fi
+
+      - name: Install build dependencies via Homebrew
+        run: brew install perl gdbm gettext icu4c libxml2 libxslt openssl@3 xz cpanminus
+
+      - name: Configure toolchain environment
+        run: |
+          {
+            echo "$(brew --prefix perl)/bin"
+            echo "$(brew --prefix libxml2)/bin"
+            echo "$(brew --prefix libxslt)/bin"
+            echo "$(brew --prefix icu4c)/bin"
+          } >> "${GITHUB_PATH}"
+          {
+            echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix libxml2)/lib/pkgconfig:$(brew --prefix libxslt)/lib/pkgconfig:$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix gettext)/lib/pkgconfig:$(brew --prefix xz)/lib/pkgconfig"
+            echo "OPENSSL_PREFIX=$(brew --prefix openssl@3)"
+          } >> "${GITHUB_ENV}"
+
+      - name: Show perl and toolchain versions
+        run: |
+          perl -V
+          which pp 2>/dev/null || true
+          pkg-config --list-all | sort
+
+      - name: Install biber's CPAN dependencies
+        run: |
+          cpanm --notest Module::Build Config::AutoConf ExtUtils::LibBuilder
+          perl Build.PL
+          ./Build installdeps --cpan_client "cpanm --notest"
+
+      - name: Build and install biber
+        run: ./Build install
+
+      - name: Install pinned PAR::Packer
+        run: cpanm --notest "https://github.com/rschupp/PAR-Packer/archive/${PAR_PACKER_REF}.tar.gz"
+
+      - name: Pack biber with pp
+        run: dist/darwin_common/pack.sh "${{ matrix.output }}"
+
+      - name: Ad-hoc codesign
+        run: |
+          chmod +x "${{ matrix.output }}"
+          codesign -s - --force --timestamp --options runtime "${{ matrix.output }}"
+          codesign -v "${{ matrix.output }}"
+
+      - name: Smoke test
+        run: |
+          xattr -c "${{ matrix.output }}" || true
+          ./"${{ matrix.output }}" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
+
+  universal:
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: biber-darwin_arm64
+          path: arm64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: biber-darwin_x86_64
+          path: x86_64
+
+      - name: Join into a universal binary
+        run: |
+          chmod +x arm64/biber-darwin_arm64 x86_64/biber-darwin_x86_64
+          lipo -create -output biber-darwin_universal arm64/biber-darwin_arm64 x86_64/biber-darwin_x86_64
+          lipo -info biber-darwin_universal
+          chmod +x biber-darwin_universal
+
+      # Packing already invalidated each thin binary's signature by appending the PAR archive, and lipo -create invalidates it again for the joined binary, so the universal binary needs its own fresh signature here.
+      - name: Re-sign after lipo
+        run: |
+          codesign -s - --force --timestamp --options runtime biber-darwin_universal
+          codesign -v biber-darwin_universal
+
+      - name: Smoke test (native slice)
+        run: |
+          xattr -c biber-darwin_universal || true
+          ./biber-darwin_universal --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: biber-darwin_universal
+          path: biber-darwin_universal
+          if-no-files-found: error
+
+  release:
+    needs: universal
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: biber-darwin_arm64
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: biber-darwin_x86_64
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: biber-darwin_universal
+          path: out
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="macos-universal-v2.17-${{ github.run_number }}"
+          gh release create "${tag}" \
+            --repo "${{ github.repository }}" \
+            --title "biber 2.17 macOS universal binary (${tag})" \
+            --notes "Rebuilt against PAR::Packer commit ${PAR_PACKER_REF}, which fixes the macOS 27 lipo -extract_family removal (upstream PAR::Packer PR #97). Built from plk/biber tag v2.17 with no source changes to biber itself." \
+            out/biber-darwin_universal out/biber-darwin_arm64 out/biber-darwin_x86_64
