@@ -49,21 +49,35 @@ linebreak_bundle=$(find "${sitearch}" "${archlib}" \( -name 'LineBreak.bundle' -
 # own dist/darwin_*/build.sh scripts do by hand for a fixed MacPorts layout;
 # doing it by inspection here reproduces that bundling for whatever
 # Homebrew or CPAN prefixes the current runner happens to use.
-declare -A seen_libs=()
+#
+# macOS ships bash 3.2 as /bin/bash, which has no associative arrays, so
+# deduplication runs through sort -u on a plain list rather than a
+# declare -A "seen" table.
+# The grep/sort stages below legitimately return no match when a bundle has
+# no non-system dependencies of its own, and pipefail would otherwise treat
+# that as a failing pipeline and abort the script under set -e; the trailing
+# "|| true" tolerates that specific case while still capturing whatever
+# sort -u did produce.
+raw_libs=$(
+  { find "${sitearch}" "${archlib}" \( -name '*.bundle' -o -name '*.so' \) -print0 |
+    xargs -0 -I{} otool -L {} |
+    grep -E '^	' |
+    awk '{print $1}' |
+    grep -Ev '^(/usr/lib/|/System/|@rpath/|@loader_path/|@executable_path/)' |
+    sort -u ; } || true
+)
+
 link_args=()
-while IFS= read -r -d '' bundle; do
+if [ -n "${raw_libs}" ]; then
   while IFS= read -r lib; do
-    case "${lib}" in
-      /usr/lib/*|/System/*|@rpath/*|@loader_path/*|@executable_path/*) continue ;;
-    esac
-    [ -n "${seen_libs[${lib}]:-}" ] && continue
-    seen_libs[${lib}]=1
     link_args+=(--link="${lib}")
-  done < <(otool -L "${bundle}" | tail -n +2 | awk '{print $1}')
-done < <(find "${sitearch}" "${archlib}" \( -name '*.bundle' -o -name '*.so' \) -print0)
+  done <<LIBS
+${raw_libs}
+LIBS
+fi
 
 echo "pack.sh: resolved --link arguments:"
-printf '  %s\n' "${link_args[@]}"
+printf '  %s\n' "${link_args[@]:-}"
 
 PAR_VERBATIM=1 pp \
   --module=deprecate \
@@ -88,7 +102,7 @@ PAR_VERBATIM=1 pp \
   --module=PerlIO::utf8_strict \
   --module=Text::CSV_XS \
   --module=DateTime \
-  "${link_args[@]}" \
+  "${link_args[@]:-}" \
   --addfile="data/biber-tool.conf;lib/Biber/biber-tool.conf" \
   --addfile="data/schemata/config.rnc;lib/Biber/config.rnc" \
   --addfile="data/schemata/config.rng;lib/Biber/config.rng" \
