@@ -14,6 +14,8 @@ on:
 
 env:
   PAR_PACKER_REF: 97977cb0c08ea977af9c7c7016ba5128c4cbfa0e
+  # Both dist/darwin_arm/build.sh and dist/darwin_x86_64/build.sh pin perl 5.32 for the v2.17 tag, and it is also Build.PL's own declared minimum. Building this exact version from source, the same way biber's own Linux CI (.github/workflows/main.yml) builds a pinned perl rather than trusting whatever the runner ships, avoids a real compile break: biber 2.17's own lib/Biber/Section.pm relies on a deprecated Perl parsing behaviour (undef EXPR used as the lvalue target of a chained assignment, from a missing semicolon at line 431) that a Homebrew-current perl (5.44 as of writing) rejects outright as a compile error.
+  PERL_VERSION: 5.32.0
 
 jobs:
   build:
@@ -39,13 +41,28 @@ jobs:
             exit 1
           fi
 
-      - name: Install build dependencies via Homebrew
-        run: brew install perl gdbm gettext icu4c libxml2 libxslt openssl@3 xz cpanminus
+      - name: Install C library dependencies via Homebrew
+        run: brew install gdbm gettext icu4c libxml2 libxslt openssl@3 xz
+
+      - name: Build Perl ${{ env.PERL_VERSION }} from source
+        run: |
+          curl -fsSL -o perl.tar.gz "https://www.cpan.org/src/5.0/perl-${PERL_VERSION}.tar.gz"
+          tar xzf perl.tar.gz
+          cd "perl-${PERL_VERSION}"
+          sh Configure -sde -Dprefix="${RUNNER_TEMP}/localperl"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+          cd ..
+          rm -rf "perl-${PERL_VERSION}" perl.tar.gz
+          echo "${RUNNER_TEMP}/localperl/bin" >> "${GITHUB_PATH}"
+
+      # A standalone fatpacked script, not a CPAN module, so there is nothing for a fresh perl's own cpan/cpanm to install it with; its own shebang is a hardcoded /usr/bin/perl, so every later invocation runs it as "perl cpanm ..." rather than "./cpanm ..." to force our own pinned perl (first on PATH) as the interpreter instead of the shebang's.
+      - name: Fetch cpanm
+        run: curl -fsSL https://cpanmin.us -o cpanm
 
       - name: Configure toolchain environment
         run: |
           {
-            echo "$(brew --prefix perl)/bin"
             echo "$(brew --prefix libxml2)/bin"
             echo "$(brew --prefix libxslt)/bin"
             echo "$(brew --prefix icu4c)/bin"
@@ -63,15 +80,15 @@ jobs:
 
       - name: Install biber's CPAN dependencies
         run: |
-          cpanm --notest Module::Build Config::AutoConf ExtUtils::LibBuilder
+          perl cpanm --notest Module::Build Config::AutoConf ExtUtils::LibBuilder
           perl Build.PL
-          ./Build installdeps --cpan_client "cpanm --notest"
+          ./Build installdeps --cpan_client "perl $(pwd)/cpanm --notest"
 
       - name: Build and install biber
         run: ./Build install
 
       - name: Install pinned PAR::Packer
-        run: cpanm --notest "https://github.com/rschupp/PAR-Packer/archive/${PAR_PACKER_REF}.tar.gz"
+        run: perl cpanm --notest "https://github.com/rschupp/PAR-Packer/archive/${PAR_PACKER_REF}.tar.gz"
 
       - name: Pack biber with pp
         run: dist/darwin_common/pack.sh "${{ matrix.output }}"

@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 # Pack an installed biber into a standalone PAR::Packer executable for the
-# current macOS architecture (arm64 or x86_64), using a Homebrew Perl toolchain
-# instead of the fixed MacPorts layout that dist/darwin_arm64/build.sh and
-# dist/darwin_x86_64/build.sh assume. Run from the repository root, after
+# current macOS architecture (arm64 or x86_64), using a pinned source-built
+# Perl toolchain instead of the fixed MacPorts layout that dist/darwin_arm/build.sh
+# and dist/darwin_x86_64/build.sh assume. Run from the repository root, after
 # `perl Build.PL`, `./Build installdeps` and `./Build install` have completed
 # against the Perl on PATH, and after installing the pinned PAR::Packer commit
 # that fixes the macOS 27 `lipo -extract_family` removal.
