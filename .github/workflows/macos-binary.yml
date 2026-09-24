@@ -14,8 +14,8 @@ on:
 
 env:
   PAR_PACKER_REF: 97977cb0c08ea977af9c7c7016ba5128c4cbfa0e
-  # Both dist/darwin_arm/build.sh and dist/darwin_x86_64/build.sh pin perl 5.32 for the v2.17 tag, and it is also Build.PL's own declared minimum. Building this exact version from source, the same way biber's own Linux CI (.github/workflows/main.yml) builds a pinned perl rather than trusting whatever the runner ships, avoids a real compile break: biber 2.17's own lib/Biber/Section.pm relies on a deprecated Perl parsing behaviour (undef EXPR used as the lvalue target of a chained assignment, from a missing semicolon at line 431) that a Homebrew-current perl (5.44 as of writing) rejects outright as a compile error.
-  PERL_VERSION: 5.32.0
+  # Both dist/darwin_arm/build.sh and dist/darwin_x86_64/build.sh pin perl 5.32 for the v2.17 tag, and it is also Build.PL's own declared minimum. Building a perl in this series from source, the same way biber's own Linux CI (.github/workflows/main.yml) builds a pinned perl rather than trusting whatever the runner ships, avoids a real compile break: biber 2.17's own lib/Biber/Section.pm relies on a deprecated Perl parsing behaviour (undef EXPR used as the lvalue target of a chained assignment, from a missing semicolon at line 431) that a Homebrew-current perl (5.44 as of writing) rejects outright as a compile error. 5.32.1, not the literal 5.32.0 release, because 5.32.0's own hints/darwin.sh only recognises a macOS product version matching "10.*"; 5.32.1 widened that to "[1-9][0-9].*", which is what lets Configure run at all on macOS 11 and later. Patch releases within a minor series do not change core language grammar, so this does not affect the parsing behaviour above.
+  PERL_VERSION: 5.32.1
 
 jobs:
   build:
