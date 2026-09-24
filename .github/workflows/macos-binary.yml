@@ -76,11 +76,17 @@ jobs:
       - name: Pack biber with pp
         run: dist/darwin_common/pack.sh "${{ matrix.output }}"
 
-      # Hardened runtime (--options runtime) imposes stricter Mach-O structural checks that a PAR::Packer executable fails ("main executable failed strict validation"), because pp appends the zipped PAR archive after the compiled Perl interpreter rather than producing a plain Mach-O. Hardened runtime is a notarization precondition we are not pursuing here (the binary is ad-hoc signed, not notarized), so a plain ad-hoc signature is both sufficient and the only option pp's own binary layout actually permits.
+      # pp appends the zipped PAR archive after the compiled Perl interpreter, so the Mach-O's own __LINKEDIT segment and LC_SYMTAB string table still declare their pre-append sizes while the file on disk is larger; codesign's strict validation rejects that mismatch with "main executable failed strict validation". PAR::Packer's own docs (lib/PAR/Packer/Troubleshooting.pod, "Code signing on macOS", added in commit 5be78ba) name this exact error and its own fix: run contrib/pp_osx_codesign_fix, which strips any pre-existing ad-hoc signature and rewrites __LINKEDIT/LC_SYMTAB to the real file size, before codesigning at all. biber's own dist/build-universal.sh calls the same helper (as ~/bin/pp_osx_codesign_fix) ahead of its own codesign step for exactly this reason.
+      - name: Build the pp_osx_codesign_fix helper
+        run: |
+          curl -fsSL -o pp_osx_codesign_fix.c "https://raw.githubusercontent.com/rschupp/PAR-Packer/${PAR_PACKER_REF}/contrib/pp_osx_codesign_fix/pp_osx_codesign_fix.c"
+          gcc -std=c99 pp_osx_codesign_fix.c -o pp_osx_codesign_fix
+
       - name: Ad-hoc codesign
         run: |
           chmod +x "${{ matrix.output }}"
-          codesign -s - --force "${{ matrix.output }}"
+          ./pp_osx_codesign_fix "${{ matrix.output }}"
+          codesign -s - --force --options runtime "${{ matrix.output }}"
           codesign -v "${{ matrix.output }}"
 
       - name: Smoke test
@@ -115,10 +121,10 @@ jobs:
           lipo -info biber-darwin_universal
           chmod +x biber-darwin_universal
 
-      # Packing already invalidated each thin binary's signature by appending the PAR archive, and lipo -create invalidates it again for the joined binary, so the universal binary needs its own fresh signature here.
+      # lipo -create invalidates each thin binary's own signature for the joined file, so the universal binary needs its own fresh signature here. No pp_osx_codesign_fix re-run is needed: each thin binary's own __LINKEDIT/LC_SYMTAB were already corrected before it was signed, and lipo embeds each architecture's Mach-O unchanged inside the fat wrapper, so this is a plain re-sign, matching biber's own dist/build-universal.sh, which never re-runs the fix helper after lipo either.
       - name: Re-sign after lipo
         run: |
-          codesign -s - --force biber-darwin_universal
+          codesign -s - --force --options runtime biber-darwin_universal
           codesign -v biber-darwin_universal
 
       - name: Smoke test (native slice)
