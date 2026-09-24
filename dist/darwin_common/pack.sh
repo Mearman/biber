@@ -89,6 +89,15 @@ fi
 echo "pack.sh: resolved --link arguments:"
 printf '  %s\n' "${link_args[@]:-}"
 
+# Every --module= below forces pp to bundle something Module::ScanDeps'
+# static analysis cannot find on its own, because the real code path only
+# reaches it through a runtime loader (Module::Runtime, Module::Implementation)
+# rather than a plain use/require pp's scanner can follow statically. Specio
+# is the newest case: DateTime::Types loads it, and Specio itself picks
+# Specio::XS or falls back to Specio::PP via Module::Implementation, so
+# neither backend is visible to a static scan and the packed binary fails at
+# runtime with "Could not find a suitable Specio implementation" unless both
+# are named explicitly here.
 PAR_VERBATIM=1 pp \
   --module=deprecate \
   --module=Biber::Input::file::bibtex \
@@ -112,6 +121,8 @@ PAR_VERBATIM=1 pp \
   --module=PerlIO::utf8_strict \
   --module=Text::CSV_XS \
   --module=DateTime \
+  --module=Specio::PP \
+  --module=Specio::XS \
   "${link_args[@]:-}" \
   --addfile="data/biber-tool.conf;lib/Biber/biber-tool.conf" \
   --addfile="data/schemata/config.rnc;lib/Biber/config.rnc" \
